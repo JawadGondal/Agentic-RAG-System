@@ -21,7 +21,7 @@ This project implements a **Retrieval-Augmented Generation (RAG)** system using:
 ---
 
 ## Project Structure
-
+```bash
 rag_app/
 │
 ├── main.py # FastAPI entrypoint
@@ -49,7 +49,7 @@ rag_app/
 ├── requirements.txt # Python dependencies
 ├── README.md # Documentation
 ├── .env # Environment variables
-
+```
 ---
 
 ## ⚙️ Setup Instructions
