@@ -1,14 +1,18 @@
 from fastapi import FastAPI
 from api import routes_chat, routes_files
+import uvicorn
 
-app = FastAPI(
-    title="Agentic RAG System",
-    description="A minimal RAG system with LangGraph, Pinecone, and OpenAI."
-)
 
-app.include_router(routes_files.router, tags=["files"], prefix="/files")
-app.include_router(routes_chat.router, tags=["chat"], prefix="/chat")
+app = FastAPI(title="Agentic RAG - LangGraph + Pinecone + OpenAI")
+
+
+app.include_router(routes_files.router, prefix="/files")
+app.include_router(routes_chat.router, prefix="/chat")
+
 
 @app.get("/")
-def read_root():
-    return {"message": "Welcome to the Agentic RAG System API!"}
+async def root():
+    return {"message": "Agentic RAG service running. See /docs for API"}
+
+if __name__ == "__main__":
+    uvicorn.run("rag_app.main:app", host="0.0.0.0", port=8080, reload=True)

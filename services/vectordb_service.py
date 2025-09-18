@@ -1,40 +1,62 @@
 from pinecone import Pinecone, ServerlessSpec
-from core.config import settings
-import uuid
+from core.config import PINECONE_API_KEY, PINECONE_CLOUD, PINECONE_REGION, PINECONE_INDEX
 
-pinecone = Pinecone(api_key=settings.PINECONE_API_KEY)
+# Global Pinecone client
+pc = Pinecone(api_key=PINECONE_API_KEY)
 
-def get_or_create_index():
-    index_name = settings.PINECONE_INDEX_NAME
-    if index_name not in pinecone.list_indexes().names:
-        pinecone.create_index(
-            name=index_name,
-            dimension=1536,  # Dimension for text-embedding-3-small
-            metric="cosine",
-            spec=ServerlessSpec(cloud="aws", region="us-west-2")
-        )
-    return pinecone.Index(index_name)
 
-def add_vectors_to_pinecone(texts: list[str], embeddings: list, file_id: str):
-    index = get_or_create_index()
-    vectors = []
-    for text, embedding in zip(texts, embeddings):
-        vectors.append({
-            "id": str(uuid.uuid4()),
-            "values": embedding,
-            "metadata": {"text": text, "file_id": file_id}
-        })
-    index.upsert(vectors=vectors)
+def create_index_if_not_exists(dim: int = 1536):
+    try:
+        indexes = pc.list_indexes().names()
+        if PINECONE_INDEX not in indexes:
+            pc.create_index(
+                name=PINECONE_INDEX,
+                dimension=dim,
+                metric="cosine",
+                spec=ServerlessSpec(cloud=PINECONE_INDEX, region=PINECONE_REGION)
+            )
+            print(f"Created index {PINECONE_INDEX}")
+    except Exception as e:
+        print("Pinecone init/create failed:", e)
 
-def delete_vectors_by_file_id(file_id: str):
-    index = get_or_create_index()
-    index.delete(filter={"file_id": {"$eq": file_id}})
-    
-def query_pinecone(query_embedding: list, top_k: int = 5):
-    index = get_or_create_index()
-    results = index.query(
+
+def upsert_vectors(vectors: list[dict]):
+    """Upsert vectors to Pinecone index."""
+    idx = pc.Index(PINECONE_INDEX)
+    # pinecone expects list of (id, vector, metadata)
+    to_upsert = [(v["id"], v["values"], v.get("metadata", {})) for v in vectors]
+    res = idx.upsert(vectors=to_upsert)
+    return res
+
+
+def query_vectors(query_embedding: list[float], top_k: int = 4) -> list[dict]:
+    """Query vectors from Pinecone index."""
+    idx = pc.Index(PINECONE_INDEX)
+    qres = idx.query(
         vector=query_embedding,
         top_k=top_k,
-        include_metadata=True
+        include_metadata=True,
+        include_values=False
     )
-    return [match['metadata']['text'] for match in results.matches]
+
+    results = []
+    for m in qres.matches:
+        results.append(
+            {
+                "id": m.id,
+                "score": m.score,
+                "metadata": m.metadata,
+            }
+        )
+    return results
+
+
+def delete_vectors_by_file(file_id: str) -> bool:
+    """Delete all vectors related to a given file_id."""
+    idx = pc.Index(PINECONE_INDEX)
+    try:
+        idx.delete(filter={"file_id": {"$eq": file_id}})
+        return True
+    except Exception as e:
+        print("Delete failed:", e)
+        return False

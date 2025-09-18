@@ -1,19 +1,35 @@
-import pypdf
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from typing import List
+from io import BytesIO
+from pypdf import PdfReader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from core.config import CHUNK_SIZE, CHUNK_OVERLAP
 
-def extract_text_from_pdf(file_path: str):
-    reader = pypdf.PdfReader(file_path)
-    text = ""
+
+
+
+def extract_text_from_pdf(content: bytes) -> str:
+    reader = PdfReader(BytesIO(content))
+    texts = []
     for page in reader.pages:
-        text += page.extract_text() or ""
-    return text
+        try:
+            texts.append(page.extract_text() or "")
+        except Exception:
+            texts.append("")
+    return "\n".join(texts)
 
-def split_text_into_chunks(text: str):
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=500,
-        chunk_overlap=100,
-        length_function=len,
-        is_separator_regex=False,
+
+
+
+def chunk_text(text: str) -> List[str]:
+    """Split text into chunks using RecursiveCharacterTextSplitter."""
+    if not text:
+        return []
+
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=CHUNK_SIZE,
+        chunk_overlap=CHUNK_OVERLAP,
+        separators=["\n\n", "\n", ". ", " ", ""],  # prefer larger semantic breaks
     )
-    chunks = text_splitter.split_text(text)
+
+    chunks = splitter.split_text(text)
     return chunks

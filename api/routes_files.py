@@ -1,61 +1,64 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException
-import uuid
-import os
-from services.data_injestion_service import extract_text_from_pdf, split_text_into_chunks
+from fastapi.responses import JSONResponse
+from services.data_injestion_service import extract_text_from_pdf, chunk_text
 from services.embeddings_service import get_embeddings
-from services.vectordb_service import add_vectors_to_pinecone, delete_vectors_by_file_id
+from services.vectordb_service import upsert_vectors, delete_vectors_by_file, create_index_if_not_exists
+import uuid
+
 
 router = APIRouter()
-UPLOAD_DIR = "uploads"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+# ensure index exists at startup
+create_index_if_not_exists()
+
 
 @router.post("/add_file")
 async def add_file(file: UploadFile = File(...)):
-    if file.content_type != "application/pdf":
-        raise HTTPException(status_code=400, detail="Only PDF files are supported.")
-    
+    if not file.filename.lower().endswith('.pdf'):
+        raise HTTPException(status_code=400, detail="Only PDF files are supported")
     file_id = str(uuid.uuid4())
-    file_path = os.path.join(UPLOAD_DIR, file_id + ".pdf")
-    
-    with open(file_path, "wb") as f:
-        f.write(await file.read())
-        
-    try:
-        text = extract_text_from_pdf(file_path)
-        chunks = split_text_into_chunks(text)
-        embeddings = get_embeddings(chunks)
-        add_vectors_to_pinecone(chunks, embeddings, file_id)
-        
-        return {"file_id": file_id, "message": "File uploaded and processed successfully."}
-    except Exception as e:
-        os.remove(file_path)
-        raise HTTPException(status_code=500, detail=f"Failed to process file: {e}")
+    filename = file.filename  # original uploaded file name
+    content = await file.read()
+    text = extract_text_from_pdf(content)
+    chunks = chunk_text(text)
+    embeddings = get_embeddings(chunks)
+    # prepare vectors: id includes file_id prefix
+    vectors = []
+    for i, emb in enumerate(embeddings):
+        vectors.append({
+            'id': f"{file_id}_chunk_{i}",
+            'values': emb,
+            'metadata': {'file_id': file_id, 'title':filename, 'chunk_index': i, 'text': chunks[i][:500]}
+            })
+    upsert_vectors(vectors)
+    return JSONResponse({"file_id": file_id, "message": "PDF ingested and vectors stored"})
+
 
 @router.delete("/delete_file/{file_id}")
-def delete_file(file_id: str):
-    try:
-        delete_vectors_by_file_id(file_id)
-        return {"message": f"Vectors for file_id {file_id} deleted successfully."}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to delete file: {e}")
+async def delete_file(file_id: str):
+    deleted = delete_vectors_by_file(file_id)
+    if deleted:
+        return JSONResponse({"file_id": file_id, "message": "Vectors deleted"})
+    else:
+        raise HTTPException(status_code=404, detail="No vectors found for file_id")
+
 
 @router.put("/update_file/{file_id}")
 async def update_file(file_id: str, file: UploadFile = File(...)):
-    if file.content_type != "application/pdf":
-        raise HTTPException(status_code=400, detail="Only PDF files are supported.")
-    
-    try:
-        delete_vectors_by_file_id(file_id)
-        
-        file_path = os.path.join(UPLOAD_DIR, file_id + ".pdf")
-        with open(file_path, "wb") as f:
-            f.write(await file.read())
-            
-        text = extract_text_from_pdf(file_path)
-        chunks = split_text_into_chunks(text)
-        embeddings = get_embeddings(chunks)
-        add_vectors_to_pinecone(chunks, embeddings, file_id)
-        
-        return {"message": f"File with file_id {file_id} updated successfully."}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to update file: {e}")
+    if not file.filename.lower().endswith('.pdf'):
+        raise HTTPException(status_code=400, detail="Only PDF files are supported")
+    content = await file.read()
+    text = extract_text_from_pdf(content)
+    chunks = chunk_text(text)
+    embeddings = get_embeddings(chunks)
+    # delete old vectors first
+    delete_vectors_by_file(file_id)
+    vectors = []
+    for i, emb in enumerate(embeddings):
+        vectors.append({
+            'id': f"{file_id}_chunk_{i}",
+            'values': emb,
+            'metadata': {'file_id': file_id, 'chunk_index': i, 'text': chunks[i][:500]}
+            })
+    upsert_vectors(vectors)
+    return JSONResponse({"file_id": file_id, "message": "File updated and vectors replaced"})
